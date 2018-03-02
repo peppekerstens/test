@@ -10,14 +10,12 @@ Function Update-Package {
         [Switch]$Force
     )
 
-    Begin {
-        $ReturnInfo = @()
-    }
+    Begin {}
 
     Process {
         Foreach ($N in $Name) {
             #Check if source is available otherwise stop
-            $Info = [PSCustomObject]@{
+            $ReturnInfo = [PSCustomObject]@{
                 Name            = $N
                 IsInstalled     = $false
                 Version         = 0
@@ -31,14 +29,14 @@ Function Update-Package {
             }
             ($Source) -and ($SplatParam.Source = $Source) | out-null
             $Latest = Find-Package @SplatParam -ErrorAction Stop
-            $Info.Latest = $Latest.Version
+            $ReturnInfo.Latest = $Latest.Version
             Try {
                 $SplatParam = @{
                     Name = $N
                 }
                 $Installed = Get-Package @SplatParam -ErrorAction Stop
-                $Info.IsInstalled = $true
-                $Info.Version = $Installed.Version
+                $ReturnInfo.IsInstalled = $true
+                $ReturnInfo.Version = $Installed.Version
                 If ($Installed.Version -ge $Latest.Version) {$Update = $false}
             }
             Catch {
@@ -59,8 +57,8 @@ Function Update-Package {
                 Version = '0'
             }
             #>
-            $Info.UpdateNeeded = $Update
-            $Info.UpdateSucceeded = $false
+            $ReturnInfo.UpdateNeeded = $Update
+            $ReturnInfo.UpdateSucceeded = $false
             If ($Update) {
                 ($Source) -and ($SplatParam.Source = $Source) | out-null
                 ($Force) -and ($SplatParam.Force = $Force) | out-null
@@ -87,11 +85,10 @@ Function Update-Package {
                     }
                 }
             }
-            $ReturnInfo += $Info
+            #Just post current status back...
+            $ReturnInfo
         }
     }
 
-    End {
-        return $ReturnInfo
-    }
+    End {}
 }

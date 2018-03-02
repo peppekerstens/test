@@ -1,11 +1,13 @@
 #First some really basic checking before run
 #Requires -Version 5
-[CmdletBinding()]
+[CmdletBinding(
+    SupportsShouldProcess = $true,
+    ConfirmImpact = 'High')]
 param(
     [String]$PSGallery = "psgallery"
 )
 
-#Script needs to run in elevated modus, self-elevate...
+#Script needs to run in elevated modus, self-elevate if possible...
 #Source: https://blogs.msdn.microsoft.com/virtual_pc_guy/2010/09/23/a-self-elevating-powershell-script/
 # Get the ID and security principal of the current user account
 $myWindowsID = [System.Security.Principal.WindowsIdentity]::GetCurrent()
@@ -41,13 +43,115 @@ else {
     exit
 }
 
-#Just call all functions as resources, if exists
-Get-ChildItem -Path (Join-Path -Path $PSScriptRoot -ChildPath 'Functions' ) -Recurse | Where-Object { $_.Name -notlike '_*' -and $_.Name -notlike '*.tests.ps1' -and $_.Name -like '*.ps1'} | ForEach-Object { . $_.FullName }
+
+Function Update-Package {
+    [CmdletBinding(
+        SupportsShouldProcess = $true,
+        ConfirmImpact = 'High')]
+    param(
+        [Parameter(Mandatory = $true)]
+        [String[]]$Name,
+        [String]$Source,
+        [Switch]$AllVersions,
+        [Switch]$Force
+    )
+
+    Begin {}
+
+    Process {
+        Foreach ($N in $Name) {
+            #Check if source is available otherwise stop
+            $ReturnInfo = [PSCustomObject]@{
+                Name            = $N
+                IsInstalled     = $false
+                Version         = 0
+                Latest          = 0
+                UpdateNeeded    = $false
+                UpdateSucceeded = $false
+                Source          = $Source
+            }
+            $SplatParam = @{
+                Name = $N
+            }
+            ($Source) -and ($SplatParam.Source = $Source) | out-null
+            $Latest = Find-Package @SplatParam -ErrorAction Stop
+            $ReturnInfo.Latest = $Latest.Version
+            Try {
+                $SplatParam = @{
+                    Name = $N
+                }
+                $Installed = Get-Package @SplatParam -ErrorAction Stop
+                $ReturnInfo.IsInstalled = $true
+                $ReturnInfo.Version = $Installed.Version
+                If ($Installed.Version -ge $Latest.Version) {$Update = $false}
+            }
+            Catch {
+                $Update = $true
+            }
+            <#
+            #Sometimes, the package registration fails but lingering older versions prevent right installation/registration
+            #Below code deletes on name, but is risky. Disabled for now; needs better solution.
+            $PSModulePath = $env:PSModulePath -split ';'
+            Foreach ($PSModPath in $PSModulePath) {
+                If (Test-Path -Path $PSModPath) {
+                    If ((Get-ChildItem -Path $PSModPath).Name -contains $N) {
+                        Remove-Item -Path (Join-Path -Path $PSModPath -ChildPath $N) -Force -Recurse -Confirm:$false
+                    }
+                }
+            }
+            $CurrentPackage = @{
+                Version = '0'
+            }
+            #>
+            $ReturnInfo.UpdateNeeded = $Update
+            $ReturnInfo.UpdateSucceeded = $false
+            If ($Update) {
+                ($Source) -and ($SplatParam.Source = $Source) | out-null
+                ($Force) -and ($SplatParam.Force = $Force) | out-null
+                Switch ($Force) {
+                    $false {$Answer = $PSCmdlet.ShouldProcess($Name)}
+                    $true {$Answer = $true}
+                }
+                If ($Answer) {
+                    Try {
+                        $SplatAllVersions = @{}
+                        ($AllVersions) -and ($SplatAllVersions.AllVersions = $AllVersions) | out-null
+                        Uninstall-Package @SplatParam @SplatAllVersions -ErrorAction Stop
+                        $Info.Source = (Install-Package @SplatParam -ErrorAction Stop).Source
+                        $Info.UpdateSucceeded = $true
+                    }
+                    Catch {
+                        Try {
+                            #Force installation
+                            $Info.Source = (Install-Package @SplatParam  -ErrorAction Stop).Source
+                            $Info.UpdateSucceeded = $true
+                        }
+                        Catch {
+                        }
+                    }
+                }
+            }
+            #Just post current status back...
+            $ReturnInfo
+        }
+    }
+
+    End {}
+}
 
 #Set write-warning to better stand-out from verbose and debug info.
-Format-OutputColor
+$a = (Get-Host).PrivateData
+If ($a) {
+    #Not every PS host has this capability
+    $PreviousWarningBackgroundColor = $a.WarningBackgroundColor
+    $PreviousWarningForegroundColor = $a.WarningForegroundColor
+    $PreviousVerboseForegroundColor = $a.VerboseForegroundColor
+    $a.WarningBackgroundColor = "red"
+    $a.WarningForegroundColor = "white"
+    $a.VerboseForegroundColor = 'cyan'
+}
 
-#There may be no pester present, so test without it first
+#First, setup/test basic pre-requisites for installation
 $prereqConditions = @(
     @{
         Label  = 'minimum OS level 2012R2'
@@ -101,7 +205,7 @@ $prereqConditions = @(
         }
     },
     @{
-        Label  = 'Latest PowerShellGet and PackageManagement installed'
+        Label  = 'latest PowerShellGet and PackageManagement installed'
         Test   = {
             (Update-Package -Name 'PowerShellGet' -Source $PSGallery -WhatIf).IsInstalled
         }
@@ -111,12 +215,11 @@ $prereqConditions = @(
         }
     },
     @{
-        Label  = 'Latest Pester module installed'
+        Label  = 'latest Pester module installed'
         Test   = {
             (Update-Package -Name 'Pester' -Source $PSGallery -WhatIf).IsInstalled
         }
         Action = {
-            #Update-Package -Name 'Pester' -Source $PublicSource
             Install-Module -Name 'Pester' -Force -SkipPublisherCheck
         }
     }
@@ -220,14 +323,16 @@ $prereqConditions = @(
     #>
 )
 
+Write-Verbose "Preparing minimum requirements for automated installation"
+
 @($prereqConditions).foreach( {
-        Write-Verbose "Testing condition [$($_.Label)]" -Verbose
+        Write-Verbose "Testing condition [$($_.Label)]"
         if (-not (& $_.Test)) {
-            Write-Warning "Failed. Remediating..."
+            Write-Warning "Condition [$($_.Label)] failed. Remediating..."
             & $_.Action
         }
         else {
-            Write-Verbose 'Passed.' -Verbose
+            Write-Verbose 'Passed.'
         }
     }) | Out-Null
 
@@ -264,7 +369,11 @@ If ($PesterExceptions -ne 0) {
 #}
 #>
 
-Format-OutputColor -ResetToDefault
+If ($a) {
+    $a.WarningBackgroundColor = $PreviousWarningBackgroundColor
+    $a.WarningForegroundColor = $PreviousWarningForegroundColor
+    $a.VerboseForegroundColor = $PreviousVerboseForegroundColor
+}
 
 Write-Host -NoNewLine "Press any key to continue..."
 $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
