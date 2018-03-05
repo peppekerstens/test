@@ -60,7 +60,8 @@ param(
         } )]
     $EventLogName,
     #Normal function of this script is: install or update when already installed. The force parameters forces a re-install/update of submodules.
-    [Switch]$Force
+    [Switch]$Force,
+    [Switch]$MoreVerbose
 )
 
 
@@ -100,97 +101,8 @@ else {
     exit
 }
 
-
-Function Update-Package {
-    [CmdletBinding(
-        SupportsShouldProcess = $true,
-        ConfirmImpact = 'High')]
-    param(
-        [Parameter(Mandatory = $true)]
-        [String[]]$Name,
-        [String]$Source,
-        [Switch]$AllVersions,
-        [Switch]$Force
-    )
-
-    Begin {}
-
-    Process {
-        Foreach ($N in $Name) {
-            $ReturnInfo = [PSCustomObject]@{
-                Name            = $N
-                IsInstalled     = $false
-                Version         = [System.Version]'0.0'
-                Latest          = [System.Version]'0.0'
-                UpdateNeeded    = $false
-                UpdateSucceeded = $false
-                Source          = $Source
-                Success         = $false
-            }
-            If (Get-PackageProvider -Verbose:$false| Where-Object -Property Name -eq NuGet) {
-                #Check if source is available otherwise stop
-                $SplatParam = @{
-                    Name = $N
-                }
-                ($Source) -and ($SplatParam.Source = $Source) | out-null
-                Try {
-                    $Latest = Find-Package @SplatParam -ErrorAction Stop -Verbose:$false
-                    $ReturnInfo.Latest = $Latest.Version
-                }
-                Catch {
-                    #Just leave latest as it is..
-                }
-                Try {
-                    $SplatParam = @{
-                        Name = $N
-                    }
-                    $Installed = Get-Package @SplatParam -ErrorAction Stop -Verbose:$false
-                    $ReturnInfo.IsInstalled = $true
-                    $ReturnInfo.Version = $Installed.Version
-                    If ($Installed.Version -ge $Latest.Version) {$Update = $false}
-                }
-                Catch {
-                    $Update = $true
-                }
-                $ReturnInfo.UpdateNeeded = $Update
-                $ReturnInfo.UpdateSucceeded = $false
-                If ($Update) {
-                    ($Source) -and ($SplatParam.Source = $Source) | out-null
-                    ($Force) -and ($SplatParam.Force = $Force) | out-null
-                    Switch ($Force) {
-                        $false {$Answer = $PSCmdlet.ShouldProcess($Name)}
-                        $true {$Answer = $true}
-                    }
-                    If ($Answer) {
-                        Try {
-                            $SplatAllVersions = @{}
-                            ($AllVersions) -and ($SplatAllVersions.AllVersions = $AllVersions) | out-null
-                            Uninstall-Package @SplatParam @SplatAllVersions -ErrorAction Stop -Verbose:$false
-                            $Info.Source = (Install-Package @SplatParam -ErrorAction Stop -Verbose:$false).Source
-                            $Info.UpdateSucceeded = $true
-                        }
-                        Catch {
-                            Try {
-                                #Force installation
-                                $Info.Source = (Install-Package @SplatParam -ErrorAction Stop -Verbose:$false).Source
-                                $Info.UpdateSucceeded = $true
-                            }
-                            Catch {
-                            }
-                        }
-                    }
-                }
-                $ReturnInfo.Success = $true
-                #Just post current status back...
-                $ReturnInfo
-            }
-        }
-    }
-
-    End {}
-}
-
 #Start script here
+$ScriptName = $MyInvocation.MyCommand.Name
 $PSGallery = @{
     Name = 'PSGallery'
 }
@@ -213,28 +125,109 @@ If ($a) {
 
 #Create or shrink logfile to desired size
 If ($Log) {
-    If (!(Test-Path $Log)) {New-Item -Path $Log -ItemType File}
-    While ((Get-Item $Log).length -gt $LogSize / 1mb) {
-        #Bron: https://stackoverflow.com/questions/2074271/remove-top-line-of-text-file-with-powershell
-        ${$Log} = ${$Log} | Select-Object -Skip 10
+    If (!(Test-Path -Path (Split-Path -Path $Log -Parent -Verbose:$MoreVerbose) -Verbose:$MoreVerbose)) {New-Item -Path (Split-Path -Path $Log -Parent -Verbose:$MoreVerbose) -ItemType Directory -Verbose:$MoreVerbose | Out-Null}
+    If ((Test-Path -Path $Log -Verbose:$MoreVerbose) -and ($LogSize)) {
+        While ((Get-Item $Log -Verbose:$MoreVerbose).length -gt 1mb / $LogSize) {
+            #Bron: https://stackoverflow.com/questions/2074271/remove-top-line-of-text-file-with-powershell
+            ${$Log} = ${$Log} | Select-Object -Skip 10 -Verbose:$MoreVerbose
+        }
     }
 }
 
 #Phase 1: Minimum pre-requisites. Prepare machine for PackageMangement, Pester testing and GenericFunctions
-$GenericFunctionsPresent = Update-Package -Name 'GenericFunctions' -Source $PSGalleryIton.Name -WhatIf
-If (!($GenericFunctionsPresent.Success -and $GenericFunctionsPresent.IsInstalled)) {
+If (!(Get-Package -Name 'GenericFunctions' -Verbose:$MoreVerbose -ErrorAction 'SilentlyContinue')) {
+    Function Update-Package {
+        [CmdletBinding(
+            SupportsShouldProcess = $true,
+            ConfirmImpact = 'High')]
+        param(
+            [Parameter(Mandatory = $true)]
+            [String[]]$Name,
+            [String]$Source,
+            [Switch]$AllVersions,
+            [Switch]$Force
+        )
+    
+        Begin {}
+    
+        Process {
+            Foreach ($N in $Name) {
+                #Check if source is available otherwise stop
+                $ReturnInfo = [PSCustomObject]@{
+                    Name            = $N
+                    IsInstalled     = $false
+                    Version         = 0
+                    Latest          = 0
+                    UpdateNeeded    = $false
+                    UpdateSucceeded = $false
+                    Source          = $Source
+                }
+                $SplatParam = @{
+                    Name = $N
+                }
+                ($Source) -and ($SplatParam.Source = $Source) | out-null
+                $Latest = Find-Package @SplatParam -ErrorAction Stop
+                $ReturnInfo.Latest = $Latest.Version
+                Try {
+                    $SplatParam = @{
+                        Name = $N
+                    }
+                    $Installed = Get-Package @SplatParam -ErrorAction Stop
+                    $ReturnInfo.IsInstalled = $true
+                    $ReturnInfo.Version = $Installed.Version
+                    If ($Installed.Version -ge $Latest.Version) {$Update = $false}
+                }
+                Catch {
+                    $Update = $true
+                }
+                $ReturnInfo.UpdateNeeded = $Update
+                $ReturnInfo.UpdateSucceeded = $false
+                If ($Update) {
+                    ($Source) -and ($SplatParam.Source = $Source) | out-null
+                    ($Force) -and ($SplatParam.Force = $Force) | out-null
+                    Switch ($Force) {
+                        $false {$Answer = $PSCmdlet.ShouldProcess($Name)}
+                        $true {$Answer = $true}
+                    }
+                    If ($Answer) {
+                        Try {
+                            $SplatAllVersions = @{}
+                            ($AllVersions) -and ($SplatAllVersions.AllVersions = $AllVersions) | out-null
+                            Uninstall-Package @SplatParam @SplatAllVersions -ErrorAction Stop
+                            $Info.Source = (Install-Package @SplatParam -ErrorAction Stop).Source
+                            $Info.UpdateSucceeded = $true
+                        }
+                        Catch {
+                            Try {
+                                #Force installation
+                                $Info.Source = (Install-Package @SplatParam  -ErrorAction Stop).Source
+                                $Info.UpdateSucceeded = $true
+                            }
+                            Catch {
+                            }
+                        }
+                    }
+                }
+                #Just post current status back...
+                $ReturnInfo
+            }
+        }
+    
+        End {}
+    }
+
     #First, setup/test basic pre-requisites for installation
     $prereqConditions = @(
         @{
-            Label  = 'minimum OS level 2012R2'
+            Label  = 'minimum OS level 2012'
             Test   = {
                 #Detect OS version/type
                 $OSVersion = [System.Environment]::OSVersion.Version
                 [System.Version]"$($OSVersion.Major).$($OSVersion.Minor)" -ge [System.Version]'6.2'
             }
             Action = {
-                ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "OS does not meet minimum requirements." -Path $Log -Level 'Error')| Out-Null
-                ($EventLogName) -and (Write-EventLog -LogName $EventLogName -Source $($MyInvocation.MyCommand.Name) -EventID $EventID -EntryType Error -Message "OS does not meet minimum requirements")
+                ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "OS does not meet minimum requirements." -Path $Log -Level 'Error' -Verbose:$MoreVerbose)| Out-Null
+                ($EventLogName) -and (Write-EventLog -LogName $EventLogName -Source $($ScriptName) -EventID $EventID -EntryType Error -Message "OS does not meet minimum requirements" -Verbose:$MoreVerbose)
                 Throw "OS does not meet minimum requirements!"
             }
         },
@@ -242,7 +235,7 @@ If (!($GenericFunctionsPresent.Success -and $GenericFunctionsPresent.IsInstalled
             Label  = 'Internet connection'
             Test   = {
                 Try {
-                    Test-Connection -ComputerName 8.8.8.8 -Count 1 -ErrorAction Stop
+                    Test-Connection -ComputerName 8.8.8.8 -Count 1 -ErrorAction Stop -Verbose:$MoreVerbose
                     $true
                 }
                 Catch {
@@ -250,8 +243,8 @@ If (!($GenericFunctionsPresent.Success -and $GenericFunctionsPresent.IsInstalled
                 }
             }
             Action = {
-                ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "No Internet connection." -Path $Log -Level 'Error')| Out-Null
-                ($EventLogName) -and (Write-EventLog -LogName $EventLogName -Source $($MyInvocation.MyCommand.Name) -EventID $EventID -EntryType Error -Message "No Internet connection")
+                ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "No Internet connection." -Path $Log -Level 'Error' -Verbose:$MoreVerbose)| Out-Null
+                ($EventLogName) -and (Write-EventLog -LogName $EventLogName -Source $($ScriptName) -EventID $EventID -EntryType Error -Message "No Internet connection" -Verbose:$MoreVerbose)
                 Throw "No Internet connection!"
             }
         },
@@ -261,8 +254,8 @@ If (!($GenericFunctionsPresent.Success -and $GenericFunctionsPresent.IsInstalled
                 [Environment]::Is64BitProcess
             }
             Action = {
-                ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "No 64bit PSSession." -Path $Log -Level 'Error')| Out-Null
-                ($EventLogName) -and (Write-EventLog -LogName $EventLogName -Source $($MyInvocation.MyCommand.Name) -EventID $EventID -EntryType Error -Message "No 64bit PSSession")
+                ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "No 64bit PSSession." -Path $Log -Level 'Error' -Verbose:$MoreVerbose)| Out-Null
+                ($EventLogName) -and (Write-EventLog -LogName $EventLogName -Source $($ScriptName) -EventID $EventID -EntryType Error -Message "No 64bit PSSession")
                 Throw "No 64bit PSSession!"
             }
         },
@@ -270,8 +263,8 @@ If (!($GenericFunctionsPresent.Success -and $GenericFunctionsPresent.IsInstalled
             Label  = 'latest NuGet provider installed'
             Test   = {
                 Try {
-                    $Latest = Find-PackageProvider -Name 'NuGet' -ForceBootstrap -ErrorAction Stop -Verbose:$false
-                    $Installed = Get-PackageProvider -Name 'NuGet' -ForceBootstrap -ErrorAction Stop -Verbose:$false
+                    $Latest = Find-PackageProvider -Name 'NuGet' -ForceBootstrap -ErrorAction Stop -Verbose:$MoreVerbose
+                    $Installed = Get-PackageProvider -Name 'NuGet' -ForceBootstrap -ErrorAction Stop -Verbose:$MoreVerbose
                     $Installed.Version -ge $Latest.Version
                 }
                 Catch {
@@ -279,86 +272,91 @@ If (!($GenericFunctionsPresent.Success -and $GenericFunctionsPresent.IsInstalled
                 }
             }
             Action = {
-                Install-PackageProvider -Name 'NuGet' -Force -Verbose:$false #if not on system, just force install
+                Install-PackageProvider -Name 'NuGet' -Force -Verbose:$MoreVerbose #if not on system, just force install
             }
         },
         @{
             Label  = 'latest PowerShellGet and PackageManagement installed'
             Test   = {
-                (Update-Package -Name 'PowerShellGet' -Source $PSGallery.Name -WhatIf).IsInstalled
+                (Update-Package -Name 'PowerShellGet' -Source $PSGallery.Name -WhatIf -Verbose:$MoreVerbose).IsInstalled
             }
             Action = {
-                Update-Package -Name 'PowerShellGet' -Source $PSGallery.Name -AllVersions -Force
+                Update-Package -Name 'PowerShellGet' -Source $PSGallery.Name -AllVersions -Force -Verbose:$MoreVerbose
             }
         },
         @{
             Label  = 'latest Pester module installed'
             Test   = {
-                (Update-Package -Name 'Pester' -Source $PSGallery.Name -WhatIf).IsInstalled
+                (Update-Package -Name 'Pester' -Source $PSGallery.Name -WhatIf -Verbose:$MoreVerbose).IsInstalled
             }
             Action = {
-                Install-Package -Name 'Pester' -Source $PSGallery.Name -Force -SkipPublisherCheck -Verbose:$false
+                #If this line not added, then a verbose load of the module happens...
+                Import-Module PackageManagement -Verbose:$MoreVerbose
+                Install-Package -Name 'Pester' -Source $PSGallery.Name -Force -SkipPublisherCheck -Verbose:$MoreVerbose
             }
-        }
+        },
         @{
             Label  = 'Set PSGalleryITON as trusted PSRepository'
             Test   = {
-                (Get-PSRepository -Verbose:$false).Name -contains $PSGalleryIton.Name
+                #If this line not added, then a verbose load of the module happens...
+                Import-Module PackageManagement -Verbose:$MoreVerbose
+                (Get-PSRepository -Verbose:$MoreVerbose).Name -contains $PSGalleryIton.Name
             }
             Action = {
-                Register-PSRepository -Name $PSGalleryIton.Name -SourceLocation $PSGalleryIton.SourceLocation -PublishLocation $PSGalleryIton.PublishLocation -Verbose:$false
-                Set-PackageSource -Name $PSGalleryIton.Name -Trusted -Verbose:$false
+                Register-PSRepository -Name $PSGalleryIton.Name -SourceLocation $PSGalleryIton.SourceLocation -PublishLocation $PSGalleryIton.PublishLocation -Verbose:$MoreVerbose
+                #If this line not added, then a verbose load of the module happens...
+                Import-Module PackageManagement -Verbose:$MoreVerbose
+                Set-PackageSource -Name $PSGalleryIton.Name -Trusted -Verbose:$MoreVerbose
             }
         },
         @{
             Label  = 'latest GenericFunctions module installed'
             Test   = {
-                (Update-Package -Name 'GenericFunctions' -Source $PSGalleryIton.Name -WhatIf).IsInstalled
+                (Update-Package -Name 'GenericFunctions' -Source $PSGalleryIton.Name -WhatIf -Verbose:$MoreVerbose).IsInstalled
             }
             Action = {
-                Update-Package -Name 'GenericFunctions' -Source $PSGalleryIton.Name -AllVersions -Force
+                Update-Package -Name 'GenericFunctions' -Source $PSGalleryIton.Name -AllVersions -Force -Verbose:$MoreVerbose
             }
         }
     )
 
-    $WriteLogPresent = (Get-Command Write-Log -ErrorAction SilentlyContinue) -and $true
+    $WriteLogPresent = (Get-Command Write-Log -ErrorAction SilentlyContinue -Verbose:$MoreVerbose) -and $true
 
     Write-Verbose "Preparing minimum requirements for installation"
-    ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "Preparing minimum requirements for installation" -Path $Log) | Out-Null
+    ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "Preparing minimum requirements for installation" -Path $Log -Verbose:$MoreVerbose) | Out-Null
 
     @($prereqConditions).foreach( {
             Write-Verbose "Testing condition [$($_.Label)]"
-            ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "Testing condition [$($_.Label)]" -Path $Log -Level 'Info')| Out-Null
+            ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "Testing condition [$($_.Label)]" -Path $Log -Verbose:$MoreVerbose)| Out-Null
             if (-not (& $_.Test)) {
                 Write-Warning "Condition [$($_.Label)] failed. Remediating..."
-                ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "Condition [$($_.Label)] failed. Remediating..." -Path $Log -Level 'Warn')| Out-Null
+                ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "Condition [$($_.Label)] failed. Remediating..." -Path $Log -Level 'Warning' -Verbose:$MoreVerbose)| Out-Null
                 & $_.Action
             }
             else {
                 Write-Verbose 'Passed.'
-                ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "Condition [$($_.Label)] passed" -Path $Log -Level 'Info')| Out-Null
+                ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "Condition [$($_.Label)] passed" -Path $Log -Verbose:$MoreVerbose)| Out-Null
             }
         }) | Out-Null
 }
 
-
 #Phase 2: Start testing the machine/environment for the Desired State
 
 #Start all pester based tests
-Invoke-Pester -OutputFile $PSScriptRoot\PesterResult.xml -Verbose:$false
+Invoke-Pester -OutputFile $PSScriptRoot\PesterResult.xml -Verbose:$MoreVerbose
 
 #Check the test results
 #$PesterTests = Get-ChildItem -Path $PSScriptRoot -Recurse | Where-Object Name -like "*.Tests.ps1"
 #Foreach ($Test in $PesterTests) {
 #[xml]$PesterResult = Get-Content -Path ($Test -replace '.ps1', '.xml')
-[xml]$PesterResult = Get-Content -Path $PSScriptRoot\PesterResult.xml
+[xml]$PesterResult = Get-Content -Path $PSScriptRoot\PesterResult.xml -Verbose:$MoreVerbose
 $PesterExceptions = $PesterResult.DocumentElement.faillures + $PesterResult.DocumentElement.inconclusive + $PesterResult.DocumentElement.skipped + $PesterResult.DocumentElement.invalid
 If ($PesterExceptions -ne 0) {
     Write-Warning -Message "Some pre-installation tests have failed. Do you want to remediate the system/environment? This may imply changes in behavior and reboots."
     $Title = [String]::Empty
     $Info = "Do you want to continue?"
-    $yes = New-Object System.Management.Automation.Host.ChoiceDescription "&Yes", "Continues with currect selection"
-    $no = New-Object System.Management.Automation.Host.ChoiceDescription "&No", "Stops currect selection"
+    $yes = New-Object System.Management.Automation.Host.ChoiceDescription "&Yes", "Continues with currect selection" -Verbose:$MoreVerbose
+    $no = New-Object System.Management.Automation.Host.ChoiceDescription "&No", "Stops currect selection" -Verbose:$MoreVerbose
     $options = [System.Management.Automation.Host.ChoiceDescription[]]($yes, $no)
     [int]$defaultchoice = 0
     $opt = $host.UI.PromptForChoice($Title , $Info , $Options, $defaultchoice)
@@ -374,115 +372,122 @@ If ($PesterExceptions -ne 0) {
 }
 #}
 #>
-($EventLogName) -and (Write-EventLog -LogName $EventLogName -Source $($MyInvocation.MyCommand.Name) -EventID $EventID -EntryType Information -Message "MyApp added a user-requested feature to the display.")
+($EventLogName) -and (Write-EventLog -LogName $EventLogName -Source $($ScriptName) -EventID $EventID -EntryType Information -Message "MyApp added a user-requested feature to the display.") | Out-Null
 
-If ($GenericFunctionsPresent.Success -and $GenericFunctionsPresent.IsInstalled) {
+If (Get-Package -Name 'GenericFunctions' -Verbose:$MoreVerbose -ErrorAction 'SilentlyContinue') {
     $Conditions = @(
         @{
             Label  = 'latest AzureRM module installed'
             Test   = {
-                (Update-Package -Name 'AzureRM' -Source $PSGallery.Name -WhatIf).IsInstalled
+                (Update-Package -Name 'AzureRM' -Source $PSGallery.Name -WhatIf -Verbose:$MoreVerbose).IsInstalled
             }
             Action = {
                 #AzureRm is a 'special' module which needs other update method
-                Update-AzureRM -Source $PSGallery.Name
+                Update-AzureRM -Source $PSGallery.Name -Verbose:$MoreVerbose
             }
         },
         @{
             Label  = 'latest AzureRmStorageTable installed'
             Test   = {
-                (Update-Package -Name 'AzureRmStorageTable' -Source $PSGallery.Name -WhatIf).IsInstalled
+                (Update-Package -Name 'AzureRmStorageTable' -Source $PSGallery.Name -WhatIf -Verbose:$MoreVerbose).IsInstalled
             }
             Action = {
-                Update-Package -Name 'AzureRmStorageTable' -Source $PSGallery.Name -AllVersions -Force
+                Update-Package -Name 'AzureRmStorageTable' -Source $PSGallery.Name -AllVersions -Force -Verbose:$MoreVerbose
             }
         },
         @{
-            Label  = '64bit PSSession'
+            Label  = 'latest MachineMetrics installed'
             Test   = {
-                [Environment]::Is64BitProcess
+                (Update-Package -Name 'MachineMetrics' -Source $PSGalleryIton.Name -WhatIf -Verbose:$MoreVerbose).IsInstalled
             }
             Action = {
-                ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "No 64bit PSSession." -Path $Log -Level 'Error')| Out-Null
-                ($EventLogName) -and (Write-EventLog -LogName $EventLogName -Source $($MyInvocation.MyCommand.Name) -EventID $EventID -EntryType Error -Message "No 64bit PSSession")
-                Throw "No 64bit PSSession!"
+                Update-Package -Name 'MachineMetrics' -Source $PSGalleryIton.Name -AllVersions -Force -Verbose:$MoreVerbose
             }
         },
         @{
-            Label  = 'latest NuGet provider installed'
+            Label  = 'set "Update MachineMetrics" ScheduledTask'
             Test   = {
+                (Get-ScheduledTask -TaskName "Update MachineMetrics" -ErrorAction 'SilentlyContinue' -Verbose:$MoreVerbose) -and $true
+            }
+            Action = {
+                $SplatSettings = @{
+                    TaskName    = "Update MachineMetrics"
+                    Description = "Updates MachineMetrics module, if there is any"
+                    Execute     = "C:\Windows\System32\WindowsPowerShell\v1.0\PowerShell.exe"
+                    Argument    = "-NonInteractive -NoProfile -ExecutionPolicy Unrestricted -Command Import-Module GenericFunctions;Update-Package -Name MachineMetrics -Force"
+                    User        = "LOCALSYSTEM"
+                }
+                Register-Schedule @SplatSettings -Verbose:$MoreVerbose
+            }
+        },
+        @{
+            Label  = 'set "MachineMetrics" ScheduledTask'
+            Test   = {
+                (Get-ScheduledTask -TaskName "MachineMetrics" -ErrorAction 'SilentlyContinue' -Verbose:$MoreVerbose) -and $true
+            }
+            Action = {
+                $SplatSettings = @{
+                    TaskName    = "MachineMetrics"
+                    Description = "ITON daily machine metrics"
+                    Execute     = "C:\Windows\System32\WindowsPowerShell\v1.0\PowerShell.exe"
+                    Argument    = "-NonInteractive -NoProfile -ExecutionPolicy Unrestricted -Command Import-Module MachineMetrics;Publish-Metrics"
+                    Type        = 'Daily'
+                    At          = '00:00:01'
+                    RandomDelay = '00:05:00'
+                    User        = "LOCALSYSTEM"
+                }
+                Register-Schedule @SplatSettings -Verbose:$MoreVerbose
+            }
+        },
+        @{
+            Label  = 'set customer info'
+            Test   = {
+                [String]$Key = 'HKLM:\SYSTEM\ITON'
+                (Get-ItemProperty -Path $Key -Name 'KvK' -ErrorAction 'SilentlyContinue' -Verbose:$MoreVerbose) -and $true
+            }
+            Action = {
+                [String]$Key = 'HKLM:\SYSTEM\ITON'
+                If (!(Test-Path $Key)) {
+                    New-Item -Path $Key -Force -Verbose:$MoreVerbose | Out-Null
+                }
                 Try {
-                    $Latest = Find-PackageProvider -Name 'NuGet' -ForceBootstrap -ErrorAction Stop -Verbose:$false
-                    $Installed = Get-PackageProvider -Name 'NuGet' -ForceBootstrap -ErrorAction Stop -Verbose:$false
-                    $Installed.Version -ge $Latest.Version
+                    Get-ItemProperty -Path $Key -Name 'KvK' -ErrorAction Stop -Verbose:$MoreVerbose
+                    Set-ItemProperty -Path $Key -Name 'KvK' -Value $KvK -Force -Verbose:$MoreVerbose | Out-Null
                 }
                 Catch {
-                    $false
+                    New-ItemProperty -Path $Key -Name 'KvK' -Value $KvK `
+                        -PropertyType STRING -Force -Verbose:$MoreVerbose | Out-Null
                 }
-            }
-            Action = {
-                Install-PackageProvider -Name 'NuGet' -Force -Verbose:$false #if not on system, just force install
-            }
-        },
-        @{
-            Label  = 'latest PowerShellGet and PackageManagement installed'
-            Test   = {
-                (Update-Package -Name 'PowerShellGet' -Source $PSGallery.Name -WhatIf).IsInstalled
-            }
-            Action = {
-                Update-Package -Name 'PowerShellGet' -Source $PSGallery.Name -AllVersions -Force
-            }
-        },
-        @{
-            Label  = 'latest Pester module installed'
-            Test   = {
-                (Update-Package -Name 'Pester' -Source $PSGallery.Name -WhatIf).IsInstalled
-            }
-            Action = {
-                Install-Package -Name 'Pester' -Source $PSGallery.Name -Force -SkipPublisherCheck -Verbose:$false
-            }
-        }
-        @{
-            Label  = 'Set PSGalleryITON as trusted PSRepository'
-            Test   = {
-                (Get-PSRepository -Verbose:$false).Name -contains $PSGalleryIton.Name
-            }
-            Action = {
-                Register-PSRepository -Name $PSGalleryIton.Name -SourceLocation $PSGalleryIton.SourceLocation -PublishLocation $PSGalleryIton.PublishLocation -Verbose:$false
-                Set-PackageSource -Name $PSGalleryIton.Name -Trusted -Verbose:$false
-            }
-        },
-        @{
-            Label  = 'latest GenericFunctions module installed'
-            Test   = {
-                (Update-Package -Name 'GenericFunctions' -Source $PSGalleryIton.Name -WhatIf).IsInstalled
-            }
-            Action = {
-                Update-Package -Name 'GenericFunctions' -Source $PSGalleryIton.Name -AllVersions -Force
             }
         }
     )
 
-    Import-Module GenericFunctions
-    $WriteLogPresent = (Get-Command Write-Log -ErrorAction SilentlyContinue) -and $true
+    Import-Module GenericFunctions -Verbose:$MoreVerbose
+    #Check if another process with this scriptname is running, and kill it
+    Stop-PSCommandLineProcess -CommandLine $ScriptName -Verbose:$MoreVerbose
+    $WriteLogPresent = (Get-Command Write-Log -ErrorAction SilentlyContinue -Verbose:$MoreVerbose) -and $true
 
-    Write-Verbose "Preparing minimum requirements for installation"
-    ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "Preparing minimum requirements for installation" -Path $Log) | Out-Null
+    Write-Verbose "Installing $ScriptName functionality"
+    ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "Installing $ScriptName functionality" -Path $Log -Verbose:$MoreVerbose) | Out-Null
 
-    @($prereqConditions).foreach( {
+    @($Conditions).foreach( {
             Write-Verbose "Testing condition [$($_.Label)]"
-            ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "Testing condition [$($_.Label)]" -Path $Log -Level 'Info')| Out-Null
+            ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "Testing condition [$($_.Label)]" -Path $Log -Verbose:$MoreVerbose)| Out-Null
             if (-not (& $_.Test)) {
                 Write-Warning "Condition [$($_.Label)] failed. Remediating..."
-                ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "Condition [$($_.Label)] failed. Remediating..." -Path $Log -Level 'Warn')| Out-Null
+                ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "Condition [$($_.Label)] failed. Remediating..." -Path $Log -Level 'Warning' -Verbose:$MoreVerbose)| Out-Null
                 & $_.Action
             }
             else {
                 Write-Verbose 'Passed.'
-                ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "Condition [$($_.Label)] passed" -Path $Log -Level 'Info')| Out-Null
+                ($Log) -and ($WriteLogPresent) -and (Write-Log -Message "Condition [$($_.Label)] passed" -Path $Log -Verbose:$MoreVerbose)| Out-Null
             }
         }) | Out-Null
 
+    #Set some final settings and run first Publish-Metrics
+    Disable-AzureRMDataCollection
+    Set-Diskmap
+    Publish-Metrics    
 }
 
 
@@ -492,5 +497,5 @@ If ($a) {
     $a.VerboseForegroundColor = $PreviousVerboseForegroundColor
 }
 
-Write-Host -NoNewLine "Press any key to continue..."
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+#Write-Host -NoNewLine "Press any key to continue..."
+#$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")

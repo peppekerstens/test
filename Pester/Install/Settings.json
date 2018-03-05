@@ -1,0 +1,10 @@
+{
+    "Repository": [
+        {
+            "Name": "PSGalleryIton",
+            "SourceLocation": "https://psgallery.office-connect.nl/nuget",
+            "PublishLocation": "https://psgallery.office-connect.nl/api/v2/package"
+        },
+        {}
+    ]
+}

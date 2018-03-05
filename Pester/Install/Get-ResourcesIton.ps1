@@ -162,7 +162,7 @@ $Conditions = @(
             (Get-PSRepository).Name -contains $ChocolateyIton
         }
         Action = {
-            Register-PackageSource -Name $ChocolateyIton -Location 'https://chocolatey.office-connect.nl/nuget' -Provider chocolatey
+            Register-PackageSource -Name $ChocolateyIton -Location 'https://chocolatey.office-connect.nl/nuget' -Provider chocolatey
             Set-PackageSource -Name $ChocolateyIton -Trusted
         }
     },
