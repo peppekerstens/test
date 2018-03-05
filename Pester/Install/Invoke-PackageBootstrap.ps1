@@ -50,7 +50,7 @@ Invoke-PackageBootstrap {
         }
     }
 
-    #Install minimum needed functionality for packagemanagement and 
+    #Install minimum needed functionality for packagemanagement and ITON specific functions
     $prereqConditions = @(
         @{
             Label  = 'minimum OS level 2012'
