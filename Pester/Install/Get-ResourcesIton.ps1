@@ -182,7 +182,7 @@ $Conditions = @(
             (Update-Package -Name 'kvk00000000_Sonicwall-DPI-Certificate' -Source $ChocolateyIton  -WhatIf).IsInstalled
         }
         Action = {
-            Update-Package -Name 'kvk00000000_Sonicwall-DPI-Certificate' -Source $ChocolateyIto -Force -AllVersions
+            Update-Package -Name 'kvk00000000_Sonicwall-DPI-Certificate' -Source $ChocolateyIton -Force -AllVersions
         }
     }
 )
@@ -202,4 +202,30 @@ If ($a) {
     $a.WarningBackgroundColor = $PreviousWarningBackgroundColor
     $a.WarningForegroundColor = $PreviousWarningForegroundColor
     $a.VerboseForegroundColor = $PreviousVerboseForegroundColor
+}
+
+#Check the test results
+#$PesterTests = Get-ChildItem -Path $PSScriptRoot -Recurse | Where-Object Name -like "*.Tests.ps1"
+#Foreach ($Test in $PesterTests) {
+#[xml]$PesterResult = Get-Content -Path ($Test -replace '.ps1', '.xml')
+[xml]$PesterResult = Get-Content -Path $PSScriptRoot\PesterResult.xml -Verbose:$MoreVerbose
+$PesterExceptions = $PesterResult.DocumentElement.faillures + $PesterResult.DocumentElement.inconclusive + $PesterResult.DocumentElement.skipped + $PesterResult.DocumentElement.invalid
+If ($PesterExceptions -ne 0) {
+    Write-Warning -Message "Some pre-installation tests have failed. Do you want to remediate the system/environment? This may imply changes in behavior and reboots."
+    $Title = [String]::Empty
+    $Info = "Do you want to continue?"
+    $yes = New-Object System.Management.Automation.Host.ChoiceDescription "&Yes", "Continues with currect selection" -Verbose:$MoreVerbose
+    $no = New-Object System.Management.Automation.Host.ChoiceDescription "&No", "Stops currect selection" -Verbose:$MoreVerbose
+    $options = [System.Management.Automation.Host.ChoiceDescription[]]($yes, $no)
+    [int]$defaultchoice = 0
+    $opt = $host.UI.PromptForChoice($Title , $Info , $Options, $defaultchoice)
+    switch ($opt) {
+        1 { exit }
+        Default { }
+    }
+
+    #There are errors, iterate through seperate tests
+    Foreach ($Test in ($PesterResult.DocumentElement.ChildNodes.results.ChildNodes.results.ChildNodes.results.ChildNodes.results.ChildNodes.Where{$_.result -ne 'Succes'})) {
+
+    }
 }
